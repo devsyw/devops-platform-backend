@@ -1,0 +1,57 @@
+spring:
+  application:
+    name: devops-platform
+
+  profiles:
+    active: local
+
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    default-property-inclusion: non_null
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: true
+        default_batch_fetch_size: 100
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
+  servlet:
+    multipart:
+      max-file-size: 10GB
+      max-request-size: 10GB
+
+server:
+  port: 8080
+
+# Swagger
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+# 패키지 빌드 설정
+package:
+  build:
+    storage-path: /tmp/devops-platform/packages
+    expire-days: 30
+
+# Harbor 설정
+harbor:
+  url: ${HARBOR_URL:http://localhost:8082}
+  username: ${HARBOR_USERNAME:admin}
+  password: ${HARBOR_PASSWORD:Harbor12345}
+  project: devops-upstream
+
+logging:
+  level:
+    com.osc.devops: DEBUG
+    org.springframework.web: INFO

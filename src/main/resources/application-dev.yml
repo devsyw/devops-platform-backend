@@ -1,0 +1,26 @@
+# Docker Compose 개발 환경
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/devops
+    username: devops
+    password: devops123
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+
+  flyway:
+    locations: classpath:db/migration
+
+# Multipass K8s 설정
+kubernetes:
+  enabled: true
+  master-ip: ${K8S_MASTER_IP:192.168.2.2}
+  api-port: 6443
+  ingress-port: 30080
+  domain: ${K8S_DOMAIN:192.168.2.2.nip.io}
+  namespace: user-containers
+  registry: ${K8S_REGISTRY:192.168.2.2:32000}
+
+harbor:
+  url: http://localhost:8082

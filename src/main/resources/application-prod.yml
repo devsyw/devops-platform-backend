@@ -1,0 +1,35 @@
+# 사내서버 운영 환경
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:postgresql}:${DB_PORT:5432}/${DB_NAME:devops}
+    username: ${DB_USERNAME:devops}
+    password: ${DB_PASSWORD:devops123}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: validate
+
+  flyway:
+    locations: classpath:db/migration
+
+# 사내서버 K8s 설정
+kubernetes:
+  enabled: true
+  master-ip: ${K8S_MASTER_IP}
+  api-port: ${K8S_API_PORT:6443}
+  ingress-port: ${K8S_INGRESS_PORT:443}
+  domain: ${K8S_DOMAIN}
+  namespace: ${K8S_NAMESPACE:devops-platform}
+  registry: ${K8S_REGISTRY}
+
+harbor:
+  url: ${HARBOR_URL}
+  username: ${HARBOR_USERNAME}
+  password: ${HARBOR_PASSWORD}
+  project: ${HARBOR_PROJECT:devops-upstream}
+
+logging:
+  level:
+    com.osc.devops: INFO

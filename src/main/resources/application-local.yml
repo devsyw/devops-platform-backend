@@ -1,0 +1,32 @@
+# 로컬 개발 환경 (Multipass K8s)
+spring:
+  datasource:
+    url: jdbc:h2:mem:devops;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+
+  flyway:
+    locations: classpath:db/migration
+
+# Multipass K8s 설정
+kubernetes:
+  enabled: true
+  master-ip: ${K8S_MASTER_IP:192.168.2.2}
+  api-port: 6443
+  ingress-port: 30080
+  domain: ${K8S_DOMAIN:192.168.2.2.nip.io}
+  namespace: user-containers
+  registry: ${K8S_REGISTRY:192.168.2.2:32000}
+
+# Harbor (로컬)
+harbor:
+  url: http://localhost:8082
