@@ -1,5 +1,5 @@
-# ---- Build Stage ----
-FROM eclipse-temurin:21-jdk AS build
+# ---- Build Stage (호스트 amd64에서 네이티브 빌드) ----
+FROM --platform=$BUILDPLATFORM eclipse-temurin:21-jdk AS build
 WORKDIR /app
 COPY gradle/ gradle/
 COPY gradlew build.gradle settings.gradle ./
@@ -7,7 +7,7 @@ RUN chmod +x gradlew && ./gradlew dependencies --no-daemon || true
 COPY src/ src/
 RUN ./gradlew bootJar --no-daemon -x test
 
-# ---- Runtime Stage ----
+# ---- Runtime Stage (ARM64) ----
 FROM eclipse-temurin:21-jre
 WORKDIR /app
 COPY --from=build /app/build/libs/*.jar app.jar
