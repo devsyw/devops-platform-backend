@@ -9,7 +9,7 @@ import java.util.concurrent.Executor;
 @Configuration
 public class AsyncConfig {
 
-    @Bean(name = "packageBuildExecutor")
+    @Bean(name = "packageBuildTaskExecutor")
     public Executor packageBuildExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(3);

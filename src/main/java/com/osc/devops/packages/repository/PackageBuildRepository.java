@@ -10,5 +10,9 @@ import java.util.Optional;
 public interface PackageBuildRepository extends JpaRepository<PackageBuild, Long> {
     Optional<PackageBuild> findByBuildHash(String buildHash);
     Page<PackageBuild> findByOrderByCreatedAtDesc(Pageable pageable);
+    Page<PackageBuild> findByCustomerIdOrderByCreatedAtDesc(Long customerId, Pageable pageable);
+    Page<PackageBuild> findByProjectIdOrderByCreatedAtDesc(Long projectId, Pageable pageable);
+    Page<PackageBuild> findByCustomerIdAndProjectIdOrderByCreatedAtDesc(Long customerId, Long projectId, Pageable pageable);
+    Page<PackageBuild> findAllByOrderByCreatedAtDesc(Pageable pageable);
     long countByStatus(BuildStatus status);
 }

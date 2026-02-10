@@ -3,6 +3,7 @@ package com.osc.devops.packages.entity;
 import com.osc.devops.common.entity.BaseTimeEntity;
 import com.osc.devops.common.enums.BuildStatus;
 import com.osc.devops.customer.entity.Customer;
+import com.osc.devops.customer.entity.Project;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -24,6 +25,10 @@ public class PackageBuild extends BaseTimeEntity {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "customer_id")
     private Customer customer;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "project_id")
+    private Project project;
 
     @Column(name = "build_hash", nullable = false, unique = true, length = 100)
     private String buildHash;
