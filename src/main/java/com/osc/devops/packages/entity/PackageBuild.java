@@ -66,6 +66,13 @@ public class PackageBuild extends BaseTimeEntity {
     @Column(length = 500)
     private String domain;
 
+    @Column(name = "deploy_env", length = 50, nullable = false)
+    @Builder.Default
+    private String deployEnv = "INTERNET";
+
+    @Column(name = "registry_url", length = 500)
+    private String registryUrl;
+
     @Column(name = "progress")
     @Builder.Default
     private Integer progress = 0;

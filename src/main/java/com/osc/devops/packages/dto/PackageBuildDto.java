@@ -22,7 +22,16 @@ public class PackageBuildDto {
         private String domain;
         private boolean tlsEnabled;
         private boolean keycloakEnabled;
+        private String deployEnv;       // INTERNET | AIRGAPPED
+        private String registryUrl;     // 사용자 지정 레지스트리 (예: harbor.company.com)
         private String builtBy;
+
+        public String getDeployEnv() {
+            return deployEnv != null ? deployEnv : "INTERNET";
+        }
+        public boolean isAirgapped() {
+            return "AIRGAPPED".equalsIgnoreCase(getDeployEnv());
+        }
     }
 
     @Getter @Builder @NoArgsConstructor @AllArgsConstructor
@@ -50,6 +59,8 @@ public class PackageBuildDto {
         private Boolean tlsEnabled;
         private String namespace;
         private String domain;
+        private String deployEnv;
+        private String registryUrl;
         private Integer progress;
         private LocalDateTime expiresAt;
         private LocalDateTime createdAt;
@@ -71,6 +82,8 @@ public class PackageBuildDto {
                     .tlsEnabled(entity.getTlsEnabled())
                     .namespace(entity.getNamespace())
                     .domain(entity.getDomain())
+                    .deployEnv(entity.getDeployEnv())
+                    .registryUrl(entity.getRegistryUrl())
                     .progress(entity.getProgress())
                     .expiresAt(entity.getExpiresAt())
                     .createdAt(entity.getCreatedAt())

@@ -23,9 +23,6 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
-
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -83,20 +80,16 @@ public class PackageBuildService {
                 .tlsEnabled(request.isTlsEnabled())
                 .namespace(request.getNamespace())
                 .domain(request.getDomain())
+                .deployEnv(request.getDeployEnv())
+                .registryUrl(request.getRegistryUrl())
                 .status(BuildStatus.BUILDING)
                 .progress(0)
                 .expiresAt(LocalDateTime.now().plusDays(expireDays))
                 .build();
         build = buildRepository.save(build);
 
-        // 트랜잭션 커밋 후 실행
-        final Long buildId = build.getId();
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                buildExecutor.executeBuild(buildId, addonInfoList, request);
-            }
-        });
+        // 별도 빈(PackageBuildExecutor)의 @Async 메서드 호출 → 프록시 경유하여 비동기 실행
+        buildExecutor.executeBuild(build.getId(), addonInfoList, request);
 
         return PackageBuildDto.Response.from(build);
     }

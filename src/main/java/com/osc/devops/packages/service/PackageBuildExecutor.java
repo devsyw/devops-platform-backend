@@ -34,7 +34,7 @@ public class PackageBuildExecutor {
     @Async
     public void executeBuild(Long buildId, List<Map<String, Object>> addonInfoList,
                              PackageBuildDto.BuildRequest request) {
-        log.info("패키지 빌드 시작: buildId={}", buildId);
+        log.info("패키지 빌드 시작: buildId={}, deployEnv={}", buildId, request.getDeployEnv());
         Path buildDir = null;
 
         try {
@@ -44,33 +44,48 @@ public class PackageBuildExecutor {
             // 빌드 디렉토리 생성
             buildDir = Paths.get(storagePath, build.getBuildHash());
             Files.createDirectories(buildDir);
-            updateProgress(build, 10);
+            updateProgress(build, 5);
 
-            // Makefile 생성
+            // deploy.sh 생성
             generateDeployScript(buildDir, addonInfoList, request);
-            updateProgress(build, 30);
+            updateProgress(build, 15);
 
             // Helm values 생성
             generateHelmValues(buildDir, addonInfoList, request);
-            updateProgress(build, 50);
+            updateProgress(build, 25);
 
             // 이미지 목록 생성
             generateImageList(buildDir, addonInfoList);
-            updateProgress(build, 60);
+            updateProgress(build, 30);
 
             // Keycloak 설정
             if (request.isKeycloakEnabled()) {
                 generateKeycloakConfig(buildDir, addonInfoList, request);
             }
-            updateProgress(build, 70);
+            updateProgress(build, 35);
+
+            // ============ 폐쇄망: helm chart pull + docker image pull/save ============
+            if (request.isAirgapped()) {
+                log.info("폐쇄망 빌드 모드 - helm chart pull 시작");
+                pullHelmCharts(buildDir, addonInfoList, build);
+                updateProgress(build, 55);
+
+                log.info("폐쇄망 빌드 모드 - docker image pull/save 시작");
+                pullAndSaveImages(buildDir, addonInfoList, request, build);
+                updateProgress(build, 80);
+
+                // push-to-registry.sh 생성
+                generatePushToRegistryScript(buildDir, addonInfoList, request);
+            }
+            updateProgress(build, 82);
 
             // install.sh
             generateInstallScript(buildDir, addonInfoList, request);
-            updateProgress(build, 80);
+            updateProgress(build, 85);
 
             // README
             generateReadme(buildDir, addonInfoList, request);
-            updateProgress(build, 85);
+            updateProgress(build, 88);
 
             // tar.gz 패키징 (Java 내장)
             String tarFileName = build.getBuildHash() + ".tar.gz";
@@ -86,8 +101,8 @@ public class PackageBuildExecutor {
             build.setProgress(100);
             buildRepository.save(build);
 
-            log.info("패키지 빌드 완료: hash={}, size={}KB, files={}",
-                    build.getBuildHash(), totalSize / 1024, countFiles(buildDir));
+            log.info("패키지 빌드 완료: hash={}, size={}MB, files={}, airgapped={}",
+                    build.getBuildHash(), totalSize / 1024 / 1024, countFiles(buildDir), request.isAirgapped());
 
         } catch (Exception e) {
             log.error("패키지 빌드 실패: buildId={}", buildId, e);
@@ -159,6 +174,7 @@ public class PackageBuildExecutor {
         sb.append("# ============================================================\n");
         sb.append("# DevOps Platform - 애드온 배포 스크립트\n");
         sb.append("# 생성: ").append(LocalDateTime.now().toLocalDate()).append("\n");
+        sb.append("# 모드: ").append(request.isAirgapped() ? "폐쇄망 (로컬 chart + image)" : "인터넷").append("\n");
         sb.append("# ============================================================\n\n");
 
         // 설정 변수
@@ -196,6 +212,7 @@ public class PackageBuildExecutor {
         sb.append("}\n\n");
 
         // 개별 install/uninstall 함수
+        boolean airgapped = request.isAirgapped();
         for (Map<String, Object> a : addons) {
             String name = (String) a.get("name");
             String displayName = (String) a.get("displayName");
@@ -203,13 +220,27 @@ public class PackageBuildExecutor {
             String helmChartName = (String) a.get("helmChartName");
             String chartVersion = (String) a.get("helmChartVersion");
 
-            String chartRef = (helmChartName != null && !helmChartName.isEmpty())
-                    ? name + "/" + helmChartName : name + "/" + name;
+            // chart 참조 결정
+            String chartRef;
+            if (airgapped) {
+                // 폐쇄망: 로컬 tgz (helm pull 결과)
+                String chartFileName = (helmChartName != null && !helmChartName.isEmpty() ? helmChartName : name);
+                if (chartVersion != null && !chartVersion.isEmpty()) {
+                    chartRef = "$SCRIPT_DIR/charts/" + chartFileName + "-" + chartVersion + ".tgz";
+                } else {
+                    // 버전 모르면 glob
+                    chartRef = "$(ls $SCRIPT_DIR/charts/" + chartFileName + "-*.tgz 2>/dev/null | head -1)";
+                }
+            } else {
+                // 인터넷: repo/chart
+                chartRef = (helmChartName != null && !helmChartName.isEmpty())
+                        ? name + "/" + helmChartName : name + "/" + name;
+            }
             String funcName = name.replace("-", "_");
 
             sb.append("install_").append(funcName).append("() {\n");
             sb.append("  echo \"📦 ").append(displayName).append(" 설치 시작...\"\n");
-            if (helmRepo != null && !helmRepo.isEmpty()) {
+            if (!airgapped && helmRepo != null && !helmRepo.isEmpty()) {
                 sb.append("  helm repo add ").append(name).append(" ").append(helmRepo).append(" 2>/dev/null || true\n");
                 sb.append("  helm repo update ").append(name).append(" 2>/dev/null || true\n");
             }
@@ -237,9 +268,13 @@ public class PackageBuildExecutor {
         // install_all
         sb.append("install_all() {\n");
         sb.append("  pre_check\n");
+        if (airgapped) {
+            sb.append("  load_images\n");
+        }
         sb.append("  echo \"\"\n");
         sb.append("  echo \"========================================\"\n");
         sb.append("  echo \"  전체 설치 시작 (").append(sorted.size()).append("개 애드온)\"\n");
+        sb.append("  echo \"  모드: ").append(airgapped ? "폐쇄망 (로컬 chart + image)" : "인터넷").append("\"\n");
         sb.append("  echo \"========================================\"\n");
         sb.append("  echo \"\"\n");
         for (Map<String, Object> a : sorted) {
@@ -768,14 +803,234 @@ public class PackageBuildExecutor {
                                 PackageBuildDto.BuildRequest request) throws IOException {
         StringBuilder sb = new StringBuilder();
         sb.append("# DevOps 애드온 패키지\n\n");
+        sb.append("- **배포 모드**: ").append(request.isAirgapped() ? "폐쇄망 (Airgapped)" : "인터넷").append("\n");
+        if (request.getRegistryUrl() != null && !request.getRegistryUrl().isBlank()) {
+            sb.append("- **레지스트리**: ").append(request.getRegistryUrl()).append("\n");
+        }
+        sb.append("- **TLS**: ").append(request.isTlsEnabled() ? "활성" : "비활성").append("\n");
+        sb.append("- **Keycloak SSO**: ").append(request.isKeycloakEnabled() ? "활성" : "비활성").append("\n\n");
+
+        sb.append("## 애드온 목록\n\n");
         sb.append("| 순서 | 애드온 | 버전 | SSO |\n|------|--------|------|-----|\n");
         addons.stream()
                 .sorted(Comparator.comparingInt(a -> (Integer) a.getOrDefault("installOrder", 50)))
                 .forEach(a -> sb.append("| ").append(a.get("installOrder")).append(" | ").append(a.get("displayName"))
                         .append(" | ").append(a.get("version")).append(" | ")
                         .append(Boolean.TRUE.equals(a.get("keycloakEnabled")) ? "✅" : "").append(" |\n"));
-        sb.append("\n## 사용법\n```bash\n# 전체 설치\nbash deploy.sh install-all\n\n# 개별 설치/삭제\nbash deploy.sh install keycloak\nbash deploy.sh uninstall harbor\n\n# 폐쇄망 이미지 로드\nbash deploy.sh load-images\n\n# 배포 상태 확인\nbash deploy.sh status\n\n# 환경 변수 오버라이드\nNAMESPACE=prod DOMAIN=prod.com bash deploy.sh install-all\n```\n");
+
+        sb.append("\n## 사용법\n\n");
+        sb.append("```bash\n# 전체 설치\nbash deploy.sh install-all\n\n");
+        sb.append("# 개별 설치/삭제\nbash deploy.sh install keycloak\nbash deploy.sh uninstall harbor\n\n");
+        sb.append("# 배포 상태 확인\nbash deploy.sh status\n\n");
+        sb.append("# 환경 변수 오버라이드\nNAMESPACE=prod DOMAIN=prod.com bash deploy.sh install-all\n```\n");
+
+        if (request.isAirgapped()) {
+            sb.append("\n## 폐쇄망 배포 가이드\n\n");
+            sb.append("이 패키지에는 Helm Chart(.tgz)와 컨테이너 이미지(.tar)가 포함되어 있습니다.\n\n");
+            sb.append("```bash\n");
+            sb.append("# 1. 이미지 로드 + 전체 설치 (install-all에서 자동 로드)\n");
+            sb.append("bash deploy.sh install-all\n\n");
+            sb.append("# 2. (선택) 고객사 내부 레지스트리에 이미지 push\n");
+            sb.append("bash scripts/push-to-registry.sh harbor.customer.com\n");
+            sb.append("```\n");
+        }
         writeFile(buildDir.resolve("README.md"), sb.toString());
+    }
+
+    // ======================== 폐쇄망 빌드 (helm pull + docker pull/save) ========================
+
+    /**
+     * 각 애드온의 helm chart를 다운로드하여 charts/ 디렉토리에 저장
+     */
+    private void pullHelmCharts(Path buildDir, List<Map<String, Object>> addons,
+                                PackageBuild build) throws IOException, InterruptedException {
+        Path chartsDir = buildDir.resolve("charts");
+        Files.createDirectories(chartsDir);
+
+        for (Map<String, Object> a : addons) {
+            String name = (String) a.get("name");
+            String helmRepo = (String) a.get("helmRepoUrl");
+            String helmChartName = (String) a.get("helmChartName");
+            String helmChartVersion = (String) a.get("helmChartVersion");
+
+            if (helmRepo == null || helmRepo.isEmpty()) continue;
+
+            String chartFullName = (helmChartName != null && !helmChartName.isEmpty())
+                    ? helmChartName : name;
+
+            // 1. helm repo add
+            exec("helm", "repo", "add", name, helmRepo);
+
+            // 2. helm repo update
+            exec("helm", "repo", "update", name);
+
+            // 3. helm pull → charts/{name}-{version}.tgz
+            List<String> pullCmd = new ArrayList<>(List.of(
+                    "helm", "pull", name + "/" + chartFullName,
+                    "-d", chartsDir.toString(), "--untar=false"
+            ));
+            if (helmChartVersion != null && !helmChartVersion.isEmpty()) {
+                pullCmd.addAll(List.of("--version", helmChartVersion));
+            }
+            int code = exec(pullCmd.toArray(new String[0]));
+            if (code == 0) {
+                log.info("  ✅ helm chart pull: {}/{}", name, chartFullName);
+            } else {
+                log.warn("  ⚠️ helm chart pull 실패: {}/{}", name, chartFullName);
+            }
+        }
+    }
+
+    /**
+     * 각 애드온의 컨테이너 이미지를 pull → save (tar) → images/ 디렉토리에 저장
+     * registryUrl이 있으면 해당 레지스트리에서 pull, 없으면 upstream에서 pull
+     */
+    private void pullAndSaveImages(Path buildDir, List<Map<String, Object>> addons,
+                                   PackageBuildDto.BuildRequest request,
+                                   PackageBuild build) throws IOException, InterruptedException {
+        Path imagesDir = buildDir.resolve("images");
+        Files.createDirectories(imagesDir);
+
+        String registryUrl = request.getRegistryUrl();
+        boolean useRegistry = (registryUrl != null && !registryUrl.isBlank());
+
+        List<String> allImages = resolveImageList(addons);
+        int total = allImages.size();
+        int done = 0;
+
+        for (String image : allImages) {
+            String pullTarget = image;
+            if (useRegistry) {
+                // harbor.company.com/library/keycloak/keycloak:26.0.7
+                String imagePath = image.contains("/") ? image : "library/" + image;
+                pullTarget = registryUrl.replaceAll("/$", "") + "/" + imagePath;
+            }
+
+            // docker pull
+            log.info("  docker pull: {}", pullTarget);
+            int pullCode = exec("docker", "pull", pullTarget);
+            if (pullCode != 0) {
+                log.warn("  ⚠️ docker pull 실패: {} (스킵)", pullTarget);
+                done++;
+                continue;
+            }
+
+            // docker save → images/{safe-filename}.tar
+            String safeFileName = image.replaceAll("[/:@]", "_") + ".tar";
+            Path tarPath = imagesDir.resolve(safeFileName);
+            int saveCode = exec("docker", "save", "-o", tarPath.toString(), pullTarget);
+            if (saveCode == 0) {
+                log.info("  ✅ docker save: {} → {}", pullTarget, safeFileName);
+            } else {
+                log.warn("  ⚠️ docker save 실패: {}", pullTarget);
+            }
+
+            done++;
+            // 이미지 진행률: 55~80% 구간에서 분배
+            int imgProgress = 55 + (int) ((done / (double) total) * 25);
+            updateProgress(build, imgProgress);
+        }
+    }
+
+    /**
+     * addons의 upstreamImages를 파싱하여 image:tag 목록 반환
+     */
+    private List<String> resolveImageList(List<Map<String, Object>> addons) {
+        List<String> result = new ArrayList<>();
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        for (Map<String, Object> a : addons) {
+            String images = (String) a.get("upstreamImages");
+            String version = (String) a.get("version");
+            if (images == null || images.isEmpty()) continue;
+            try {
+                List<String> list = mapper.readValue(images,
+                        new com.fasterxml.jackson.core.type.TypeReference<>() {});
+                for (String img : list) {
+                    String tag = (!img.contains("/")) ? "latest" : (version != null ? version : "latest");
+                    result.add(img + ":" + tag);
+                }
+            } catch (Exception ignored) {}
+        }
+        return result;
+    }
+
+    /**
+     * 고객사 내부 레지스트리에 이미지 push 스크립트 생성
+     */
+    private void generatePushToRegistryScript(Path buildDir, List<Map<String, Object>> addons,
+                                              PackageBuildDto.BuildRequest request) throws IOException {
+        Path scriptsDir = buildDir.resolve("scripts");
+        Files.createDirectories(scriptsDir);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("#!/bin/bash\n");
+        sb.append("set -e\n");
+        sb.append("SCRIPT_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\n");
+        sb.append("BASE_DIR=\"$(dirname \"$SCRIPT_DIR\")\"\n\n");
+        sb.append("# ============================================================\n");
+        sb.append("# 고객사 내부 레지스트리에 이미지 push\n");
+        sb.append("# 사용법: bash push-to-registry.sh <registry-url>\n");
+        sb.append("# 예시:   bash push-to-registry.sh harbor.customer.com\n");
+        sb.append("# ============================================================\n\n");
+
+        sb.append("REGISTRY=\"${1:-${REGISTRY:-}}\"\n");
+        sb.append("if [ -z \"$REGISTRY\" ]; then\n");
+        sb.append("  echo \"사용법: $0 <registry-url>\"\n");
+        sb.append("  echo \"예시:   $0 harbor.customer.com\"\n");
+        sb.append("  exit 1\n");
+        sb.append("fi\n\n");
+
+        sb.append("echo \"========================================\"\n");
+        sb.append("echo \"  이미지 로드 + 태그 + Push\"\n");
+        sb.append("echo \"  대상 레지스트리: $REGISTRY\"\n");
+        sb.append("echo \"========================================\"\n\n");
+
+        // 이미지 로드 → 태그 → push
+        List<String> allImages = resolveImageList(addons);
+        sb.append("echo \"📦 이미지 로드 중...\"\n");
+        sb.append("for img in $BASE_DIR/images/*.tar; do\n");
+        sb.append("  [ -f \"$img\" ] || continue\n");
+        sb.append("  echo \"  로드: $(basename $img)\"\n");
+        sb.append("  docker load -i \"$img\"\n");
+        sb.append("done\n\n");
+
+        sb.append("echo \"\"\necho \"🏷️  태그 + Push 시작...\"\n\n");
+
+        for (String image : allImages) {
+            String imagePath = image.contains("/") ? image : "library/" + image;
+            sb.append("echo \"  push: ").append(image).append("\"\n");
+            sb.append("docker tag ").append(image).append(" \"$REGISTRY/").append(imagePath).append("\" 2>/dev/null || true\n");
+            sb.append("docker push \"$REGISTRY/").append(imagePath).append("\" 2>/dev/null || echo \"    ⚠️ push 실패: ").append(image).append("\"\n\n");
+        }
+
+        sb.append("echo \"\"\n");
+        sb.append("echo \"========================================\"\n");
+        sb.append("echo \"  ✅ Push 완료: $REGISTRY\"\n");
+        sb.append("echo \"========================================\"\n");
+        writeFile(scriptsDir.resolve("push-to-registry.sh"), sb.toString());
+    }
+
+    /**
+     * 외부 프로세스 실행 헬퍼
+     */
+    private int exec(String... command) throws IOException, InterruptedException {
+        ProcessBuilder pb = new ProcessBuilder(command)
+                .redirectErrorStream(true);
+        Process process = pb.start();
+
+        // 출력 소비 (프로세스 블로킹 방지)
+        try (var reader = new java.io.BufferedReader(new java.io.InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                log.debug("[exec] {}", line);
+            }
+        }
+
+        int exitCode = process.waitFor();
+        if (exitCode != 0) {
+            log.warn("[exec] 종료 코드 {}: {}", exitCode, String.join(" ", command));
+        }
+        return exitCode;
     }
 
     // ======================== 유틸리티 ========================
