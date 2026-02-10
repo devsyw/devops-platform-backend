@@ -73,6 +73,10 @@ public class PackageBuild extends BaseTimeEntity {
     @Column(name = "registry_url", length = 500)
     private String registryUrl;
 
+    @Column(name = "platform", length = 100)
+    @Builder.Default
+    private String platform = "linux/amd64";
+
     @Column(name = "progress")
     @Builder.Default
     private Integer progress = 0;

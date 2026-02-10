@@ -22,6 +22,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -82,14 +84,23 @@ public class PackageBuildService {
                 .domain(request.getDomain())
                 .deployEnv(request.getDeployEnv())
                 .registryUrl(request.getRegistryUrl())
+                .platform(request.getPlatform())
                 .status(BuildStatus.BUILDING)
                 .progress(0)
                 .expiresAt(LocalDateTime.now().plusDays(expireDays))
                 .build();
         build = buildRepository.save(build);
 
-        // 별도 빈(PackageBuildExecutor)의 @Async 메서드 호출 → 프록시 경유하여 비동기 실행
-        buildExecutor.executeBuild(build.getId(), addonInfoList, request);
+        // 트랜잭션 커밋 후 비동기 빌드 실행 (커밋 전 @Async 호출 시 레코드 조회 실패 방지)
+        final Long buildId = build.getId();
+        final List<Map<String, Object>> finalAddonInfoList = addonInfoList;
+        final PackageBuildDto.BuildRequest finalRequest = request;
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                buildExecutor.executeBuild(buildId, finalAddonInfoList, finalRequest);
+            }
+        });
 
         return PackageBuildDto.Response.from(build);
     }
@@ -146,13 +157,19 @@ public class PackageBuildService {
 
             String version = sel.getVersion();
             String helmChartVersion = sel.getHelmChartVersion();
+            String imageTags = null;
 
+            // 버전 미지정 시 latest 버전 조회
+            AddonVersion addonVersion = null;
             if (version == null || version.isEmpty()) {
-                AddonVersion latest = addonVersionRepository.findByAddonIdAndIsLatestTrue(addon.getId()).orElse(null);
-                if (latest != null) {
-                    version = latest.getVersion();
-                    helmChartVersion = latest.getHelmChartVersion();
-                }
+                addonVersion = addonVersionRepository.findByAddonIdAndIsLatestTrue(addon.getId()).orElse(null);
+            } else {
+                addonVersion = addonVersionRepository.findByAddonIdAndVersion(addon.getId(), version).orElse(null);
+            }
+            if (addonVersion != null) {
+                version = addonVersion.getVersion();
+                helmChartVersion = addonVersion.getHelmChartVersion();
+                imageTags = addonVersion.getImageTags();
             }
 
             Map<String, Object> info = new LinkedHashMap<>();
@@ -165,6 +182,7 @@ public class PackageBuildService {
             info.put("helmChartName", addon.getHelmChartName());
             info.put("helmChartVersion", helmChartVersion);
             info.put("upstreamImages", addon.getUpstreamImages());
+            info.put("imageTags", imageTags);
             info.put("keycloakEnabled", addon.getKeycloakEnabled());
             info.put("installOrder", addon.getInstallOrder());
             result.add(info);

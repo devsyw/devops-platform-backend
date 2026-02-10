@@ -55,7 +55,7 @@ public class PackageBuildExecutor {
             updateProgress(build, 25);
 
             // 이미지 목록 생성
-            generateImageList(buildDir, addonInfoList);
+            generateImageList(buildDir, addonInfoList, request);
             updateProgress(build, 30);
 
             // Keycloak 설정
@@ -67,7 +67,10 @@ public class PackageBuildExecutor {
             // ============ 폐쇄망: helm chart pull + docker image pull/save ============
             if (request.isAirgapped()) {
                 log.info("폐쇄망 빌드 모드 - helm chart pull 시작");
-                pullHelmCharts(buildDir, addonInfoList, build);
+                List<String> failedCharts = pullHelmCharts(buildDir, addonInfoList, build);
+                if (!failedCharts.isEmpty()) {
+                    log.warn("⚠️ 다음 chart 다운로드 실패 (deploy.sh에서 건너뜀): {}", failedCharts);
+                }
                 updateProgress(build, 55);
 
                 log.info("폐쇄망 빌드 모드 - docker image pull/save 시작");
@@ -175,6 +178,7 @@ public class PackageBuildExecutor {
         sb.append("# DevOps Platform - 애드온 배포 스크립트\n");
         sb.append("# 생성: ").append(LocalDateTime.now().toLocalDate()).append("\n");
         sb.append("# 모드: ").append(request.isAirgapped() ? "폐쇄망 (로컬 chart + image)" : "인터넷").append("\n");
+        sb.append("# 플랫폼: ").append(request.getPlatform()).append("\n");
         sb.append("# ============================================================\n\n");
 
         // 설정 변수
@@ -224,13 +228,9 @@ public class PackageBuildExecutor {
             String chartRef;
             if (airgapped) {
                 // 폐쇄망: 로컬 tgz (helm pull 결과)
+                // helm pull 결과 파일명이 예측 불가 (v접두사, +빌드메타 등) → glob으로 탐색
                 String chartFileName = (helmChartName != null && !helmChartName.isEmpty() ? helmChartName : name);
-                if (chartVersion != null && !chartVersion.isEmpty()) {
-                    chartRef = "$SCRIPT_DIR/charts/" + chartFileName + "-" + chartVersion + ".tgz";
-                } else {
-                    // 버전 모르면 glob
-                    chartRef = "$(ls $SCRIPT_DIR/charts/" + chartFileName + "-*.tgz 2>/dev/null | head -1)";
-                }
+                chartRef = "$(ls $SCRIPT_DIR/charts/" + chartFileName + "-*.tgz 2>/dev/null | head -1)";
             } else {
                 // 인터넷: repo/chart
                 chartRef = (helmChartName != null && !helmChartName.isEmpty())
@@ -244,6 +244,14 @@ public class PackageBuildExecutor {
                 sb.append("  helm repo add ").append(name).append(" ").append(helmRepo).append(" 2>/dev/null || true\n");
                 sb.append("  helm repo update ").append(name).append(" 2>/dev/null || true\n");
             }
+            if (airgapped) {
+                // chart tgz 존재 검증
+                sb.append("  local CHART=\"").append(chartRef).append("\"\n");
+                sb.append("  if [ -z \"$CHART\" ] || [ ! -f \"$CHART\" ]; then\n");
+                sb.append("    echo -e \"${YELLOW}⚠️  ").append(displayName).append(" chart 파일이 없습니다. 건너뜁니다.${NC}\"\n");
+                sb.append("    return 0\n");
+                sb.append("  fi\n");
+            }
             sb.append("  local VALUES=\"-f $SCRIPT_DIR/values/").append(name).append(".yaml\"\n");
             if (request.isTlsEnabled()) {
                 sb.append("  [ -f \"$SCRIPT_DIR/values/").append(name).append("-tls.yaml\" ] && VALUES=\"$VALUES -f $SCRIPT_DIR/values/").append(name).append("-tls.yaml\"\n");
@@ -251,10 +259,16 @@ public class PackageBuildExecutor {
             if (request.isKeycloakEnabled() && Boolean.TRUE.equals(a.get("keycloakEnabled"))) {
                 sb.append("  [ -f \"$SCRIPT_DIR/values/").append(name).append("-keycloak.yaml\" ] && VALUES=\"$VALUES -f $SCRIPT_DIR/values/").append(name).append("-keycloak.yaml\"\n");
             }
-            sb.append("  helm upgrade --install ").append(name).append(" ").append(chartRef);
+            sb.append("  helm upgrade --install ").append(name).append(" ");
+            if (airgapped) {
+                sb.append("\"$CHART\"");
+            } else {
+                sb.append(chartRef);
+            }
             sb.append(" -n \"$NAMESPACE\" --create-namespace");
             sb.append(" $VALUES");
-            if (chartVersion != null && !chartVersion.isEmpty()) sb.append(" --version ").append(chartVersion);
+            // 폐쇄망은 로컬 tgz이므로 --version 불필요, 인터넷만 --version 지정
+            if (!airgapped && chartVersion != null && !chartVersion.isEmpty()) sb.append(" --version ").append(chartVersion);
             sb.append(" --wait --timeout \"$TIMEOUT\"\n");
             sb.append("  echo -e \"${GREEN}  ✅ ").append(displayName).append(" 설치 완료${NC}\"\n");
             sb.append("}\n\n");
@@ -614,28 +628,34 @@ public class PackageBuildExecutor {
         };
     }
 
-    private void generateImageList(Path buildDir, List<Map<String, Object>> addons) throws IOException {
+    private void generateImageList(Path buildDir, List<Map<String, Object>> addons,
+                                   PackageBuildDto.BuildRequest request) throws IOException {
         Path imagesDir = buildDir.resolve("images");
         Files.createDirectories(imagesDir);
         writeFile(imagesDir.resolve(".gitkeep"), "");
 
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
         StringBuilder sb = new StringBuilder();
-        sb.append("# 필요 이미지 목록 (폐쇄망 배포 시 Harbor 미러링 필요)\n\n");
+        sb.append("# 필요 이미지 목록 (폐쇄망 배포 시 Harbor 미러링 필요)\n");
+        sb.append("# 플랫폼: ").append(request.getPlatform()).append("\n\n");
         for (Map<String, Object> a : addons) {
             sb.append("# ").append(a.get("displayName")).append("\n");
             String images = (String) a.get("upstreamImages");
+            String imageTagsJson = (String) a.get("imageTags");
+            String version = (String) a.get("version");
             if (images != null && !images.isEmpty()) {
                 try {
-                    var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                    List<String> list = mapper.readValue(images, new com.fasterxml.jackson.core.type.TypeReference<>() {});
-                    String version = (String) a.get("version");
+                    List<String> list = mapper.readValue(images, new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {});
+                    Map<String, String> tagMap = new LinkedHashMap<>();
+                    if (imageTagsJson != null && !imageTagsJson.isEmpty()) {
+                        try {
+                            tagMap = mapper.readValue(imageTagsJson,
+                                    new com.fasterxml.jackson.core.type.TypeReference<>() {});
+                        } catch (Exception ignored) {}
+                    }
                     for (String img : list) {
-                        // 공식 이미지(슬래시 없음: redis, sonarqube 등)는 addon 버전과 다를 수 있으므로 latest
-                        if (!img.contains("/")) {
-                            sb.append(img).append(":latest\n");
-                        } else {
-                            sb.append(img).append(":").append(version).append("\n");
-                        }
+                        String tag = resolveImageTag(img, tagMap, version);
+                        sb.append(img).append(":").append(tag).append("\n");
                     }
                 } catch (Exception ignored) {}
             }
@@ -842,10 +862,11 @@ public class PackageBuildExecutor {
     /**
      * 각 애드온의 helm chart를 다운로드하여 charts/ 디렉토리에 저장
      */
-    private void pullHelmCharts(Path buildDir, List<Map<String, Object>> addons,
-                                PackageBuild build) throws IOException, InterruptedException {
+    private List<String> pullHelmCharts(Path buildDir, List<Map<String, Object>> addons,
+                                        PackageBuild build) throws IOException, InterruptedException {
         Path chartsDir = buildDir.resolve("charts");
         Files.createDirectories(chartsDir);
+        List<String> failedCharts = new ArrayList<>();
 
         for (Map<String, Object> a : addons) {
             String name = (String) a.get("name");
@@ -874,11 +895,13 @@ public class PackageBuildExecutor {
             }
             int code = exec(pullCmd.toArray(new String[0]));
             if (code == 0) {
-                log.info("  ✅ helm chart pull: {}/{}", name, chartFullName);
+                log.info("  ✅ helm chart pull: {}/{} (version: {})", name, chartFullName, helmChartVersion);
             } else {
-                log.warn("  ⚠️ helm chart pull 실패: {}/{}", name, chartFullName);
+                log.warn("  ⚠️ helm chart pull 실패: {}/{} (version: {})", name, chartFullName, helmChartVersion);
+                failedCharts.add(chartFullName + ":" + helmChartVersion);
             }
         }
+        return failedCharts;
     }
 
     /**
@@ -893,65 +916,111 @@ public class PackageBuildExecutor {
 
         String registryUrl = request.getRegistryUrl();
         boolean useRegistry = (registryUrl != null && !registryUrl.isBlank());
+        String[] platforms = request.getPlatforms(); // ["linux/amd64"] or ["linux/amd64","linux/arm64"]
 
         List<String> allImages = resolveImageList(addons);
-        int total = allImages.size();
+        int total = allImages.size() * platforms.length;
         int done = 0;
 
         for (String image : allImages) {
-            String pullTarget = image;
-            if (useRegistry) {
-                // harbor.company.com/library/keycloak/keycloak:26.0.7
-                String imagePath = image.contains("/") ? image : "library/" + image;
-                pullTarget = registryUrl.replaceAll("/$", "") + "/" + imagePath;
-            }
+            for (String platform : platforms) {
+                platform = platform.trim();
+                String pullTarget = image;
+                if (useRegistry) {
+                    String imagePath = image.contains("/") ? image : "library/" + image;
+                    pullTarget = registryUrl.replaceAll("/$", "") + "/" + imagePath;
+                }
 
-            // docker pull
-            log.info("  docker pull: {}", pullTarget);
-            int pullCode = exec("docker", "pull", pullTarget);
-            if (pullCode != 0) {
-                log.warn("  ⚠️ docker pull 실패: {} (스킵)", pullTarget);
+                // docker pull --platform <arch>
+                log.info("  docker pull [{}]: {}", platform, pullTarget);
+                int pullCode = exec("docker", "pull", "--platform", platform, pullTarget);
+                if (pullCode != 0) {
+                    log.warn("  ⚠️ docker pull 실패 [{}]: {} (스킵)", platform, pullTarget);
+                    done++;
+                    continue;
+                }
+
+                // docker save → images/{safe-filename}[_arch].tar
+                String archSuffix = platforms.length > 1 ? "_" + platform.replace("linux/", "") : "";
+                String safeFileName = image.replaceAll("[/:@]", "_") + archSuffix + ".tar";
+                Path tarPath = imagesDir.resolve(safeFileName);
+                int saveCode = exec("docker", "save", "-o", tarPath.toString(), pullTarget);
+                if (saveCode == 0) {
+                    log.info("  ✅ docker save [{}]: {} → {}", platform, pullTarget, safeFileName);
+                } else {
+                    log.warn("  ⚠️ docker save 실패 [{}]: {}", platform, pullTarget);
+                }
+
                 done++;
-                continue;
+                int imgProgress = 55 + (int) ((done / (double) total) * 25);
+                updateProgress(build, imgProgress);
             }
-
-            // docker save → images/{safe-filename}.tar
-            String safeFileName = image.replaceAll("[/:@]", "_") + ".tar";
-            Path tarPath = imagesDir.resolve(safeFileName);
-            int saveCode = exec("docker", "save", "-o", tarPath.toString(), pullTarget);
-            if (saveCode == 0) {
-                log.info("  ✅ docker save: {} → {}", pullTarget, safeFileName);
-            } else {
-                log.warn("  ⚠️ docker save 실패: {}", pullTarget);
-            }
-
-            done++;
-            // 이미지 진행률: 55~80% 구간에서 분배
-            int imgProgress = 55 + (int) ((done / (double) total) * 25);
-            updateProgress(build, imgProgress);
         }
     }
 
     /**
-     * addons의 upstreamImages를 파싱하여 image:tag 목록 반환
+     * addons의 upstreamImages + imageTags를 파싱하여 image:tag 목록 반환
+     * imageTags: {"grafana":"11.3.0","loki":"3.2.0","prometheus":"2.54.0"}
+     * upstreamImages: ["grafana/grafana","grafana/loki","prom/prometheus"]
+     * → grafana/grafana:11.3.0, grafana/loki:3.2.0, prom/prometheus:2.54.0
      */
     private List<String> resolveImageList(List<Map<String, Object>> addons) {
         List<String> result = new ArrayList<>();
         var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
         for (Map<String, Object> a : addons) {
             String images = (String) a.get("upstreamImages");
+            String imageTagsJson = (String) a.get("imageTags");
             String version = (String) a.get("version");
             if (images == null || images.isEmpty()) continue;
             try {
                 List<String> list = mapper.readValue(images,
                         new com.fasterxml.jackson.core.type.TypeReference<>() {});
+
+                // imageTags JSON 파싱 (key: short name, value: tag)
+                Map<String, String> tagMap = new LinkedHashMap<>();
+                if (imageTagsJson != null && !imageTagsJson.isEmpty()) {
+                    try {
+                        tagMap = mapper.readValue(imageTagsJson,
+                                new com.fasterxml.jackson.core.type.TypeReference<>() {});
+                    } catch (Exception ignored) {}
+                }
+
                 for (String img : list) {
-                    String tag = (!img.contains("/")) ? "latest" : (version != null ? version : "latest");
+                    String tag = resolveImageTag(img, tagMap, version);
                     result.add(img + ":" + tag);
                 }
             } catch (Exception ignored) {}
         }
         return result;
+    }
+
+    /**
+     * 이미지 이름에서 short name을 추출하고 tagMap에서 태그를 찾는다.
+     * 예: "grafana/loki" → shortName="loki" → tagMap.get("loki") = "3.2.0"
+     */
+    private String resolveImageTag(String imageName, Map<String, String> tagMap, String fallbackVersion) {
+        // 이미지 이름에서 마지막 / 뒤의 부분 추출
+        String shortName = imageName.contains("/")
+                ? imageName.substring(imageName.lastIndexOf("/") + 1)
+                : imageName;
+
+        // 1) tagMap에서 정확히 일치하는 키 찾기
+        if (tagMap.containsKey(shortName)) {
+            return tagMap.get(shortName);
+        }
+
+        // 2) tagMap에서 부분 일치 (예: "configmap-reload" → 없으면 스킵)
+        for (Map.Entry<String, String> entry : tagMap.entrySet()) {
+            if (shortName.contains(entry.getKey()) || entry.getKey().contains(shortName)) {
+                return entry.getValue();
+            }
+        }
+
+        // 3) fallback: 공식 이미지(슬래시 없음)는 latest, 그 외는 version
+        if (!imageName.contains("/")) {
+            return "latest";
+        }
+        return fallbackVersion != null ? fallbackVersion : "latest";
     }
 
     /**
@@ -1011,9 +1080,16 @@ public class PackageBuildExecutor {
     }
 
     /**
-     * 외부 프로세스 실행 헬퍼
+     * 외부 프로세스 실행 헬퍼 (기본 타임아웃 10분)
      */
     private int exec(String... command) throws IOException, InterruptedException {
+        return exec(600, command);
+    }
+
+    /**
+     * 외부 프로세스 실행 헬퍼 (타임아웃 지정, 초 단위)
+     */
+    private int exec(int timeoutSeconds, String... command) throws IOException, InterruptedException {
         ProcessBuilder pb = new ProcessBuilder(command)
                 .redirectErrorStream(true);
         Process process = pb.start();
@@ -1026,7 +1102,14 @@ public class PackageBuildExecutor {
             }
         }
 
-        int exitCode = process.waitFor();
+        boolean finished = process.waitFor(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
+        if (!finished) {
+            log.error("[exec] 타임아웃 ({}초): {}", timeoutSeconds, String.join(" ", command));
+            process.destroyForcibly();
+            return -1;
+        }
+
+        int exitCode = process.exitValue();
         if (exitCode != 0) {
             log.warn("[exec] 종료 코드 {}: {}", exitCode, String.join(" ", command));
         }

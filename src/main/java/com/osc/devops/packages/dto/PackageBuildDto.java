@@ -24,10 +24,20 @@ public class PackageBuildDto {
         private boolean keycloakEnabled;
         private String deployEnv;       // INTERNET | AIRGAPPED
         private String registryUrl;     // 사용자 지정 레지스트리 (예: harbor.company.com)
+        private String platform;        // linux/amd64 | linux/arm64 | linux/amd64,linux/arm64
         private String builtBy;
 
         public String getDeployEnv() {
             return deployEnv != null ? deployEnv : "INTERNET";
+        }
+        public String getPlatform() {
+            return platform != null && !platform.isBlank() ? platform : "linux/amd64";
+        }
+        public boolean isMultiPlatform() {
+            return getPlatform().contains(",");
+        }
+        public String[] getPlatforms() {
+            return getPlatform().split(",");
         }
         public boolean isAirgapped() {
             return "AIRGAPPED".equalsIgnoreCase(getDeployEnv());
@@ -61,6 +71,7 @@ public class PackageBuildDto {
         private String domain;
         private String deployEnv;
         private String registryUrl;
+        private String platform;
         private Integer progress;
         private LocalDateTime expiresAt;
         private LocalDateTime createdAt;
@@ -84,6 +95,7 @@ public class PackageBuildDto {
                     .domain(entity.getDomain())
                     .deployEnv(entity.getDeployEnv())
                     .registryUrl(entity.getRegistryUrl())
+                    .platform(entity.getPlatform())
                     .progress(entity.getProgress())
                     .expiresAt(entity.getExpiresAt())
                     .createdAt(entity.getCreatedAt())
