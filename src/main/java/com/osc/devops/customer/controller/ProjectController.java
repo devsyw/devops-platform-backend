@@ -18,8 +18,12 @@ public class ProjectController {
     private final ProjectService projectService;
 
     @GetMapping
-    public ApiResponse<List<ProjectDto.Response>> getProjects(@PathVariable Long customerId) {
-        return ApiResponse.ok(projectService.getProjects(customerId));
+    public ApiResponse<List<ProjectDto.Response>> getProjects(
+            @PathVariable Long customerId,
+            @RequestParam(required = false) Boolean includeInactive) {
+        return ApiResponse.ok(Boolean.TRUE.equals(includeInactive)
+                ? projectService.getAllProjects(customerId)
+                : projectService.getProjects(customerId));
     }
 
     @GetMapping("/{id}")
@@ -46,5 +50,10 @@ public class ProjectController {
     public ApiResponse<Void> deleteProject(@PathVariable Long id) {
         projectService.deleteProject(id);
         return ApiResponse.ok("프로젝트가 비활성화되었습니다.");
+    }
+
+    @PutMapping("/{id}/activate")
+    public ApiResponse<ProjectDto.Response> activateProject(@PathVariable Long id) {
+        return ApiResponse.ok(projectService.activateProject(id), "프로젝트가 활성화되었습니다.");
     }
 }

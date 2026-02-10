@@ -72,4 +72,17 @@ public class ProjectService {
         project.setIsActive(false);
         projectRepository.save(project);
     }
+
+    @Transactional
+    public ProjectDto.Response activateProject(Long id) {
+        Project project = projectRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("프로젝트를 찾을 수 없습니다. id=" + id));
+        project.setIsActive(true);
+        return ProjectDto.Response.from(projectRepository.save(project));
+    }
+
+    public List<ProjectDto.Response> getAllProjects(Long customerId) {
+        return projectRepository.findByCustomerIdOrderByIsActiveDescCreatedAtDesc(customerId)
+                .stream().map(ProjectDto.Response::from).collect(Collectors.toList());
+    }
 }

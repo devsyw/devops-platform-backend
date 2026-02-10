@@ -19,10 +19,18 @@ public class CustomerService {
 
     private final CustomerRepository customerRepository;
 
-    public Page<CustomerResponse> getCustomers(String keyword, Pageable pageable) {
-        Page<Customer> page = (keyword != null && !keyword.isBlank())
-                ? customerRepository.searchByKeyword(keyword, pageable)
-                : customerRepository.findByIsActiveTrue(pageable);
+    public Page<CustomerResponse> getCustomers(String keyword, Boolean includeInactive, Pageable pageable) {
+        boolean showAll = Boolean.TRUE.equals(includeInactive);
+        Page<Customer> page;
+        if (keyword != null && !keyword.isBlank()) {
+            page = showAll
+                    ? customerRepository.searchByKeywordIncludeInactive(keyword, pageable)
+                    : customerRepository.searchByKeyword(keyword, pageable);
+        } else {
+            page = showAll
+                    ? customerRepository.findAllByOrderByIsActiveDescCreatedAtDesc(pageable)
+                    : customerRepository.findByIsActiveTrue(pageable);
+        }
         return page.map(CustomerResponse::from);
     }
 
@@ -34,6 +42,19 @@ public class CustomerService {
 
     @Transactional
     public CustomerResponse createCustomer(CustomerCreateRequest request) {
+        // 같은 코드의 비활성 고객사가 있으면 안내
+        if (request.getCode() != null && !request.getCode().isBlank()) {
+            customerRepository.findByCode(request.getCode()).ifPresent(existing -> {
+                if (!existing.getIsActive()) {
+                    throw new com.osc.devops.common.exception.BadRequestException(
+                            "동일한 코드('" + request.getCode() + "')의 비활성 고객사가 존재합니다. " +
+                                    "해당 고객사를 활성화하거나 다른 코드를 사용해주세요. (고객사 ID: " + existing.getId() + ")");
+                } else {
+                    throw new com.osc.devops.common.exception.BadRequestException(
+                            "이미 사용 중인 코드입니다: " + request.getCode());
+                }
+            });
+        }
         Customer customer = Customer.builder()
                 .name(request.getName())
                 .code(request.getCode())
@@ -56,6 +77,15 @@ public class CustomerService {
     public CustomerResponse updateCustomer(Long id, CustomerUpdateRequest request) {
         Customer customer = customerRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("고객사를 찾을 수 없습니다. id=" + id));
+        // 코드 변경 시 중복 체크
+        if (request.getCode() != null && !request.getCode().equals(customer.getCode())) {
+            customerRepository.findByCode(request.getCode()).ifPresent(existing -> {
+                if (!existing.getId().equals(id)) {
+                    throw new com.osc.devops.common.exception.BadRequestException(
+                            "이미 사용 중인 코드입니다: " + request.getCode());
+                }
+            });
+        }
         if (request.getName() != null) customer.setName(request.getName());
         if (request.getCode() != null) customer.setCode(request.getCode());
         if (request.getEnvironment() != null) customer.setEnvironment(request.getEnvironment());
@@ -78,5 +108,13 @@ public class CustomerService {
                 .orElseThrow(() -> new NotFoundException("고객사를 찾을 수 없습니다. id=" + id));
         customer.setIsActive(false);
         customerRepository.save(customer);
+    }
+
+    @Transactional
+    public CustomerResponse activateCustomer(Long id) {
+        Customer customer = customerRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("고객사를 찾을 수 없습니다. id=" + id));
+        customer.setIsActive(true);
+        return CustomerResponse.from(customerRepository.save(customer));
     }
 }

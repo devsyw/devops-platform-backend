@@ -6,5 +6,6 @@ import java.util.List;
 
 public interface ProjectRepository extends JpaRepository<Project, Long> {
     List<Project> findByCustomerIdAndIsActiveTrueOrderByCreatedAtDesc(Long customerId);
+    List<Project> findByCustomerIdOrderByIsActiveDescCreatedAtDesc(Long customerId);
     long countByCustomerIdAndIsActiveTrue(Long customerId);
 }

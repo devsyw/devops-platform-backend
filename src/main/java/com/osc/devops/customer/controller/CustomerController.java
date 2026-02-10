@@ -23,8 +23,9 @@ public class CustomerController {
     @GetMapping
     public ApiResponse<PageResponse<CustomerResponse>> getCustomers(
             @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Boolean includeInactive,
             @PageableDefault(size = 10) Pageable pageable) {
-        return ApiResponse.ok(PageResponse.from(customerService.getCustomers(keyword, pageable)));
+        return ApiResponse.ok(PageResponse.from(customerService.getCustomers(keyword, includeInactive, pageable)));
     }
 
     @GetMapping("/{id}")
@@ -47,5 +48,10 @@ public class CustomerController {
     public ApiResponse<Void> deleteCustomer(@PathVariable Long id) {
         customerService.deleteCustomer(id);
         return ApiResponse.ok("고객사가 비활성화되었습니다.");
+    }
+
+    @PutMapping("/{id}/activate")
+    public ApiResponse<CustomerResponse> activateCustomer(@PathVariable Long id) {
+        return ApiResponse.ok(customerService.activateCustomer(id), "고객사가 활성화되었습니다.");
     }
 }
