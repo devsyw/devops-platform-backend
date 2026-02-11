@@ -3,7 +3,7 @@
 -- ============================================================
 
 CREATE TABLE project (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     customer_id BIGINT NOT NULL,
     name VARCHAR(200) NOT NULL,
     code VARCHAR(100),
@@ -22,8 +22,8 @@ CREATE INDEX idx_project_customer_id ON project(customer_id);
 
 -- installation 테이블에 project_id 컬럼 추가
 ALTER TABLE installation ADD COLUMN project_id BIGINT;
-ALTER TABLE installation ADD FOREIGN KEY (project_id) REFERENCES project(id);
+ALTER TABLE installation ADD CONSTRAINT fk_inst_proj FOREIGN KEY (project_id) REFERENCES project(id);
 
 -- package_build 테이블에 project_id 컬럼 추가
 ALTER TABLE package_build ADD COLUMN project_id BIGINT;
-ALTER TABLE package_build ADD FOREIGN KEY (project_id) REFERENCES project(id);
+ALTER TABLE package_build ADD CONSTRAINT fk_pkg_proj FOREIGN KEY (project_id) REFERENCES project(id);

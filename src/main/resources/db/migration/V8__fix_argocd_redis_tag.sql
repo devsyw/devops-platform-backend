@@ -4,7 +4,7 @@
 
 -- 1. ArgoCD: imageTags에 redis 태그 추가 (latest → 7.4.1-alpine)
 UPDATE addon_version SET image_tags =
-                             '{"argocd":"v2.13.2","redis":"7.4.1-alpine"}'
+  '{"argocd":"v2.13.2","redis":"7.4.1-alpine"}'
 WHERE addon_id = (SELECT id FROM addon WHERE name = 'argocd') AND is_latest = TRUE;
 
 -- 2. Monitoring: upstream_images의 prom/ prefix → 실제 Docker Hub 경로

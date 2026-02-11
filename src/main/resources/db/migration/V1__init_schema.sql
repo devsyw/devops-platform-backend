@@ -4,7 +4,7 @@
 
 -- 고객사
 CREATE TABLE customer (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     name VARCHAR(200) NOT NULL,
     code VARCHAR(50) UNIQUE,
     environment VARCHAR(50),
@@ -25,7 +25,7 @@ CREATE TABLE customer (
 
 -- 애드온
 CREATE TABLE addon (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL UNIQUE,
     display_name VARCHAR(200) NOT NULL,
     category VARCHAR(50) NOT NULL,
@@ -46,7 +46,7 @@ CREATE TABLE addon (
 
 -- 애드온 버전
 CREATE TABLE addon_version (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     addon_id BIGINT NOT NULL,
     version VARCHAR(100) NOT NULL,
     image_tags TEXT,
@@ -61,7 +61,7 @@ CREATE TABLE addon_version (
 
 -- 설치 이력
 CREATE TABLE installation (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     customer_id BIGINT NOT NULL,
     installed_at TIMESTAMP,
     installed_by VARCHAR(100),
@@ -80,7 +80,7 @@ CREATE TABLE installation (
 
 -- 설치-애드온 매핑
 CREATE TABLE install_addon (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     installation_id BIGINT NOT NULL,
     addon_id BIGINT NOT NULL,
     version VARCHAR(100) NOT NULL,
@@ -91,7 +91,7 @@ CREATE TABLE install_addon (
 
 -- 인증서
 CREATE TABLE certificate (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     customer_id BIGINT NOT NULL,
     domain VARCHAR(500) NOT NULL,
     issued_at DATE,
@@ -108,7 +108,7 @@ CREATE TABLE certificate (
 
 -- 인증서 갱신 이력
 CREATE TABLE cert_renewal_history (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     certificate_id BIGINT NOT NULL,
     prev_expires_at DATE NOT NULL,
     new_expires_at DATE NOT NULL,
@@ -120,7 +120,7 @@ CREATE TABLE cert_renewal_history (
 
 -- 패키지 빌드
 CREATE TABLE package_build (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     customer_id BIGINT,
     build_hash VARCHAR(100) NOT NULL UNIQUE,
     selected_addons TEXT NOT NULL,
@@ -141,7 +141,7 @@ CREATE TABLE package_build (
 
 -- Harbor 동기화 로그
 CREATE TABLE harbor_sync_log (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     addon_id BIGINT NOT NULL,
     sync_type VARCHAR(50) NOT NULL,
     status VARCHAR(50) NOT NULL DEFAULT 'IN_PROGRESS',
@@ -154,7 +154,7 @@ CREATE TABLE harbor_sync_log (
 
 -- 알림
 CREATE TABLE notification (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     type VARCHAR(50) NOT NULL,
     title VARCHAR(300) NOT NULL,
     message TEXT,

@@ -1,0 +1,31 @@
+# K8s 배포 환경 (사내서버)
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:devops-postgres}:${DB_PORT:5432}/${DB_NAME:devops}
+    username: ${DB_USERNAME:devops}
+    password: ${DB_PASSWORD:devops123}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: validate
+
+  flyway:
+    locations: classpath:db/migration/postgresql
+
+harbor:
+  url: ${HARBOR_URL:https://harbor.devops.cicd.test}
+  username: ${HARBOR_USERNAME:admin}
+  password: ${HARBOR_PASSWORD:vmffpdltm}
+  project: ${HARBOR_PROJECT:devops-upstream}
+
+# 패키지 빌드 설정
+package:
+  build:
+    storage-path: /data/packages
+    expire-days: 30
+
+logging:
+  level:
+    com.osc.devops: INFO
