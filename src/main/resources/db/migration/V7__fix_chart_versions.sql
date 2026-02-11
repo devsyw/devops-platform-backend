@@ -17,7 +17,7 @@ WHERE addon_id = (SELECT id FROM addon WHERE name = 'keycloak') AND is_latest = 
 -- 3. Monitoring: upstream_images에서 jimmidyson/configmap-reload 제거
 --    kube-prometheus-stack 65.0.0에서 prometheus-config-reloader로 대체됨
 UPDATE addon SET upstream_images =
-                     '[\"grafana/grafana\",\"grafana/loki\",\"prom/prometheus\",\"prom/alertmanager\"]'
+                     '["grafana/grafana","grafana/loki","prom/prometheus","prom/alertmanager"]'
 WHERE name = 'monitoring';
 
 -- 4. Monitoring: imageTags에서 configmap-reload 제거

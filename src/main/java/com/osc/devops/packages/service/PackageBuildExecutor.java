@@ -420,7 +420,8 @@ public class PackageBuildExecutor {
                 writeFile(valuesDir.resolve(name + "-tls.yaml"), generateTlsValues(name, domain));
             }
             if (request.isKeycloakEnabled() && Boolean.TRUE.equals(addon.get("keycloakEnabled"))) {
-                writeFile(valuesDir.resolve(name + "-keycloak.yaml"), generateKeycloakValues(name, domain));
+                writeFile(valuesDir.resolve(name + "-keycloak.yaml"),
+                        generateKeycloakValues(name, domain, request.isAirgapped()));
             }
         }
     }
@@ -539,7 +540,7 @@ public class PackageBuildExecutor {
         };
     }
 
-    private String generateKeycloakValues(String name, String domain) {
+    private String generateKeycloakValues(String name, String domain, boolean isAirgap) {
         String kcUrl = "https://keycloak." + domain;
         String realm = "devops";
         String clientId = name;
@@ -600,17 +601,29 @@ public class PackageBuildExecutor {
                         policy.csv: |
                           g, /devops-admin, role:admin
                     """.formatted(domain, kcUrl, realm, clientId);
-            case "sonarqube" -> """
+            case "sonarqube" -> {
+                String base = """
                     sonarProperties:
                       sonar.auth.oidc.enabled: "true"
                       sonar.auth.oidc.issuerUri: %s/realms/%s
                       sonar.auth.oidc.clientId.secured: %s
                       sonar.auth.oidc.clientSecret.secured: changeme-run-configure-keycloak-sh
                       sonar.auth.oidc.scopes: openid profile email
+                    """.formatted(kcUrl, realm, clientId);
+                if (isAirgap) {
+                    yield base + """
+                    # ⚠️ 폐쇄망: OIDC 플러그인을 수동 설치 필요
+                    # 인터넷 환경에서 다운로드 후 SonarQube plugins/ 디렉토리에 복사:
+                    # https://github.com/vaulttec/sonar-auth-oidc/releases/download/v2.1.1/sonar-auth-oidc-plugin-2.1.1.jar
+                    """;
+                } else {
+                    yield base + """
                     plugins:
                       install:
                         - https://github.com/vaulttec/sonar-auth-oidc/releases/download/v2.1.1/sonar-auth-oidc-plugin-2.1.1.jar
-                    """.formatted(kcUrl, realm, clientId);
+                    """;
+                }
+            }
             case "nexus" -> """
                     # Nexus OIDC: Keycloak 연동은 Nexus Pro 전용 기능
                     # Community 버전은 SAML/OIDC 미지원
@@ -775,16 +788,29 @@ public class PackageBuildExecutor {
         sb.append("echo \"  Phase 2: SSO 대상 애드온 재배포 (Secret 반영)\"\n");
         sb.append("echo \"========================================\"\n\n");
 
+        boolean isAirgap = request.isAirgapped();
         for (Map<String, Object> a : addons) {
             if (Boolean.TRUE.equals(a.get("keycloakEnabled")) && !"keycloak".equals(a.get("name"))) {
                 String n = (String) a.get("name");
                 String displayName = (String) a.get("displayName");
                 String helmChartName = (String) a.get("helmChartName");
-                String chartRef = (helmChartName != null && !helmChartName.isEmpty())
-                        ? n + "/" + helmChartName : n + "/" + n;
 
                 sb.append("echo \"🔄 ").append(displayName).append(" 재배포\"\n");
-                sb.append("helm upgrade --install ").append(n).append(" ").append(chartRef);
+
+                if (isAirgap) {
+                    // 폐쇄망: 로컬 chart tgz 사용 (deploy.sh와 동일 패턴)
+                    String chartGlob = (helmChartName != null && !helmChartName.isEmpty())
+                            ? helmChartName : n;
+                    sb.append("CHART=\"$(ls $BASE_DIR/charts/").append(chartGlob).append("-*.tgz 2>/dev/null | head -1)\"\n");
+                    sb.append("if [ -n \"$CHART\" ] && [ -f \"$CHART\" ]; then\n");
+                    sb.append("  helm upgrade --install ").append(n).append(" \"$CHART\"");
+                } else {
+                    // 인터넷: 원격 repo 참조
+                    String chartRef = (helmChartName != null && !helmChartName.isEmpty())
+                            ? n + "/" + helmChartName : n + "/" + n;
+                    sb.append("helm upgrade --install ").append(n).append(" ").append(chartRef);
+                }
+
                 sb.append(" -n $NAMESPACE");
                 sb.append(" -f \"$BASE_DIR/values/").append(n).append(".yaml\"");
                 if (request.isTlsEnabled()) {
@@ -792,6 +818,13 @@ public class PackageBuildExecutor {
                 }
                 sb.append(" -f \"$BASE_DIR/values/").append(n).append("-keycloak.yaml\"");
                 sb.append(" --wait --timeout 600s\n");
+
+                if (isAirgap) {
+                    sb.append("else\n");
+                    sb.append("  echo \"  ⚠️ ").append(displayName).append(" chart 파일이 없습니다. 건너뜁니다.\"\n");
+                    sb.append("fi\n");
+                }
+
                 sb.append("echo \"  ✅ ").append(displayName).append(" 재배포 완료\"\n\n");
             }
         }
@@ -931,11 +964,21 @@ public class PackageBuildExecutor {
                     pullTarget = registryUrl.replaceAll("/$", "") + "/" + imagePath;
                 }
 
-                // docker pull --platform <arch>
+                // docker pull --platform <arch> (최대 3회 재시도)
                 log.info("  docker pull [{}]: {}", platform, pullTarget);
-                int pullCode = exec("docker", "pull", "--platform", platform, pullTarget);
+                int pullCode = -1;
+                int maxRetries = 3;
+                for (int attempt = 1; attempt <= maxRetries; attempt++) {
+                    pullCode = exec("docker", "pull", "--platform", platform, pullTarget);
+                    if (pullCode == 0) break;
+                    if (attempt < maxRetries) {
+                        log.warn("  ⚠️ docker pull 실패 (시도 {}/{}) [{}]: {} - {}초 후 재시도",
+                                attempt, maxRetries, platform, pullTarget, attempt * 10);
+                        Thread.sleep(attempt * 10_000L); // 10s, 20s 대기
+                    }
+                }
                 if (pullCode != 0) {
-                    log.warn("  ⚠️ docker pull 실패 [{}]: {} (스킵)", platform, pullTarget);
+                    log.warn("  ❌ docker pull 최종 실패 [{}]: {} ({}회 시도 후 스킵)", platform, pullTarget, maxRetries);
                     done++;
                     continue;
                 }
